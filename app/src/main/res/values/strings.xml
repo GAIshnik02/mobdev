@@ -1,3 +1,17 @@
 <resources>
-    <string name="app_name">Mobdev</string>
+    <string name="app_name">ContactListApp</string>
+    <string name="no_contacts">Нет контактов</string>
+    <string name="refresh">Обновить список</string>
+    <string name="refreshing">Обновление…</string>
+    <string name="back">Назад</string>
+    <string name="name_label">Имя: </string>
+    <string name="phone_label">Телефон: </string>
+    <string name="email_label">Email: </string>
+    <string name="not_specified">Не указано</string>
+    <string name="no_permission_title">Нет разрешения на чтение контактов</string>
+    <string name="request_permission">Запросить разрешение</string>
+    <string name="rationale_title">Для работы приложения необходим доступ к контактам</string>
+    <string name="rationale_text">Приложение использует контакты для отображения списка и информации о людях</string>
+    <string name="grant_access">Предоставить доступ</string>
+    <string name="no_name">Без имени</string>
 </resources>

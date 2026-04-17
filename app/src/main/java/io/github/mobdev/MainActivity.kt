@@ -1,248 +1,243 @@
 package io.github.mobdev
 
+import android.Manifest
 import android.os.Bundle
-import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
-import java.text.DecimalFormat
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import com.google.accompanist.permissions.*
 
-
-class MainActivity : AppCompatActivity() {
-
-    private lateinit var mathOperation: TextView
-    private lateinit var resultText: TextView
-
-    private var currentInput = ""
-    private var firstNumber = 0.0
-    private var operation = ""
-    private var isNewOperation = true
-    private var isResultDisplayed = false
-
-    private val decimalFormat = DecimalFormat().apply {
-        maximumFractionDigits = 10
-        isGroupingUsed = false
-    }
-
+class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-
-        mathOperation = findViewById(R.id.math_operation)
-        resultText = findViewById(R.id.result_text)
-
-        disableSystemKeyboard()
-
-        initButtons()
-
-        if (savedInstanceState != null) {
-            currentInput = savedInstanceState.getString("currentInput", "")
-            firstNumber = savedInstanceState.getDouble("firstNumber", 0.0)
-            operation = savedInstanceState.getString("operation", "")
-            isNewOperation = savedInstanceState.getBoolean("isNewOperation", true)
-            isResultDisplayed = savedInstanceState.getBoolean("isResultDisplayed", false)
-            updateDisplay()
-        }
-    }
-
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        outState.putString("currentInput", currentInput)
-        outState.putDouble("firstNumber", firstNumber)
-        outState.putString("operation", operation)
-        outState.putBoolean("isNewOperation", isNewOperation)
-        outState.putBoolean("isResultDisplayed", isResultDisplayed)
-    }
-
-    private fun initButtons() {
-        // Цифры
-        findViewById<TextView>(R.id.btn_0).setOnClickListener { appendNumber("0") }
-        findViewById<TextView>(R.id.btn_1).setOnClickListener { appendNumber("1") }
-        findViewById<TextView>(R.id.btn_2).setOnClickListener { appendNumber("2") }
-        findViewById<TextView>(R.id.btn_3).setOnClickListener { appendNumber("3") }
-        findViewById<TextView>(R.id.btn_4).setOnClickListener { appendNumber("4") }
-        findViewById<TextView>(R.id.btn_5).setOnClickListener { appendNumber("5") }
-        findViewById<TextView>(R.id.btn_6).setOnClickListener { appendNumber("6") }
-        findViewById<TextView>(R.id.btn_7).setOnClickListener { appendNumber("7") }
-        findViewById<TextView>(R.id.btn_8).setOnClickListener { appendNumber("8") }
-        findViewById<TextView>(R.id.btn_9).setOnClickListener { appendNumber("9") }
-        findViewById<TextView>(R.id.btn_dot).setOnClickListener { appendDot() }
-
-        // Операции
-        findViewById<TextView>(R.id.btn_plus).setOnClickListener { setOperation("+") }
-        findViewById<TextView>(R.id.btn_minus).setOnClickListener { setOperation("-") }
-        findViewById<TextView>(R.id.btn_mod).setOnClickListener { setOperation("*") }
-        findViewById<TextView>(R.id.btn_sub).setOnClickListener { setOperation("/") }
-
-        // Специальные кнопки
-        findViewById<TextView>(R.id.btn_AC).setOnClickListener { clearAll() }
-        findViewById<TextView>(R.id.btn_back).setOnClickListener { deleteLast() }
-        findViewById<TextView>(R.id.btn_equals).setOnClickListener { calculate() }
-    }
-
-    private fun disableSystemKeyboard() {
-        mathOperation.showSoftInputOnFocus = false
-        mathOperation.isFocusable = false
-        mathOperation.isFocusableInTouchMode = false
-
-        resultText.showSoftInputOnFocus = false
-        resultText.isFocusable = false
-        resultText.isFocusableInTouchMode = false
-    }
-
-
-    private fun appendNumber(number: String) {
-        // Если после результата начинаем новый ввод
-        if (isResultDisplayed) {
-            clearAll()
-            isResultDisplayed = false
-        }
-
-        // Если новая операция, то очищаем текущий ввод
-        if (isNewOperation) {
-            currentInput = ""
-            isNewOperation = false
-        }
-
-        // Ограничиваем длину
-        if (currentInput.length < 15) {
-            currentInput += number
-            updateDisplay()
-        }
-    }
-
-    private fun appendDot() {
-        if (isResultDisplayed) {
-            clearAll()
-            isResultDisplayed = false
-        }
-
-        if (isNewOperation) {
-            currentInput = ""
-            isNewOperation = false
-        }
-
-        // Проверяем есть ли уже точка в текущем числе
-        if (!currentInput.contains(".")) {
-            currentInput += if (currentInput.isEmpty()) "0." else "."
-            updateDisplay()
-        }
-    }
-
-    private fun setOperation(op: String) {
-        // Если после результата начинаем новую операцию
-        if (isResultDisplayed) {
-            firstNumber = resultText.text.toString().toDouble()
-            isResultDisplayed = false
-            currentInput = ""
-            operation = op
-            isNewOperation = true
-            updateDisplay()
-            return
-        }
-
-        // Если есть текущий ввод — сохраняем его
-        if (currentInput.isNotEmpty()) {
-            firstNumber = currentInput.toDouble()
-            currentInput = ""
-            operation = op
-            isNewOperation = true
-            updateDisplay()
-        } else if (operation.isNotEmpty()) {
-            // Меняем операцию если она уже была
-            operation = op
-            updateDisplay()
-        }
-    }
-
-    private fun calculate() {
-        // Если нет операции или нет второго числа
-        if (operation.isEmpty()) return
-
-        val secondNumber = if (currentInput.isNotEmpty()) {
-            currentInput.toDouble()
-        } else if (isResultDisplayed) {
-            resultText.text.toString().toDouble()
-        } else {
-            return
-        }
-
-        val result = when (operation) {
-            "+" -> firstNumber + secondNumber
-            "-" -> firstNumber - secondNumber
-            "*" -> firstNumber * secondNumber
-            "/" -> {
-                if (secondNumber == 0.0) {
-                    mathOperation.text = "ERROR"
-                    return
+        setContent {
+            MaterialTheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    ContactApp()
                 }
-                firstNumber / secondNumber
             }
-            else -> return
-        }
-
-        // Форматируем результат
-        val formattedResult = formatResult(result)
-        resultText.text = formattedResult
-
-        // Показываем выражение в верхнем поле
-        val formattedFirst = formatResult(firstNumber)
-        val formattedSecond = formatResult(secondNumber)
-        mathOperation.text = "$formattedFirst $operation $formattedSecond ="
-
-        // Сохраняем результат для дальнейших операций
-        firstNumber = result
-        currentInput = ""
-        operation = ""
-        isNewOperation = true
-        isResultDisplayed = true
-    }
-
-    private fun deleteLast() {
-        if (isResultDisplayed) {
-            clearAll()
-            return
-        }
-
-        if (currentInput.isNotEmpty()) {
-            currentInput = currentInput.dropLast(1)
-            updateDisplay()
         }
     }
+}
 
-    private fun clearAll() {
-        currentInput = ""
-        firstNumber = 0.0
-        operation = ""
-        isNewOperation = true
-        isResultDisplayed = false
-        mathOperation.text = ""
-        resultText.text = "0"
-    }
+@OptIn(ExperimentalPermissionsApi::class)
+@Composable
+fun ContactApp() {
+    val permissionState = rememberPermissionState(Manifest.permission.READ_CONTACTS)
 
-    private fun updateDisplay() {
-        // Обновляем нижнее поле
-        if (currentInput.isEmpty()) {
-            resultText.text = if (operation.isEmpty()) "0" else "0"
-        } else {
-            resultText.text = currentInput
+    when {
+        permissionState.status.isGranted -> {
+            ContactListScreen()
         }
-
-        // Обновляем верхнее поле
-        if (operation.isNotEmpty() && firstNumber != 0.0) {
-            val formattedFirst = formatResult(firstNumber)
-            mathOperation.text = "$formattedFirst $operation"
-        } else if (operation.isEmpty() && mathOperation.text.toString().isNotEmpty() && !mathOperation.text.toString().contains("=")) {
-            // Очищаем верхнее поле если нет операции
-            mathOperation.text = ""
+        permissionState.status.shouldShowRationale -> {
+            RationaleScreen(
+                onRequestPermission = { permissionState.launchPermissionRequest() }
+            )
+        }
+        else -> {
+            NoPermissionScreen(
+                onRequestPermission = { permissionState.launchPermissionRequest() }
+            )
         }
     }
+}
 
-    private fun formatResult(value: Double): String {
-        return if (value == value.toLong().toDouble()) {
-            value.toLong().toString()
-        } else {
-            // Ограничиваем количество знаков после запятой
-            val formatted = decimalFormat.format(value)
-            formatted.replace(",", ".")
+@Composable
+fun ContactListScreen() {
+    val context = LocalContext.current
+    var contacts by remember { mutableStateOf<List<Contact>>(emptyList()) }
+    var selectedContact by remember { mutableStateOf<Contact?>(null) }
+    var isLoading by remember { mutableStateOf(true) }
+    var isRefreshing by remember { mutableStateOf(false) }
+
+    // Загрузка при первом входе
+    LaunchedEffect(Unit) {
+        contacts = context.fetchAllContacts()
+        isLoading = false
+    }
+
+    // Функция обновления
+    val refreshContacts = {
+        isRefreshing = true
+        contacts = context.fetchAllContacts()
+        isRefreshing = false
+    }
+
+    if (selectedContact != null) {
+        ContactDetailScreen(
+            contact = selectedContact!!,
+            onBack = { selectedContact = null }
+        )
+    } else {
+        when {
+            isLoading -> {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+            }
+            else -> {
+                Column {
+                    // Кнопка обновления
+                    Button(
+                        onClick = { refreshContacts() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(8.dp),
+                        enabled = !isRefreshing
+                    ) {
+                        if (isRefreshing) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(stringResource(R.string.refreshing))
+                        } else {
+                            Text(stringResource(R.string.refresh))
+                        }
+                    }
+
+                    if (contacts.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .weight(1f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(stringResource(R.string.no_contacts))
+                        }
+                    } else {
+                        LazyColumn {
+                            items(contacts) { contact ->
+                                ContactListItem(
+                                    contact = contact,
+                                    onClick = { selectedContact = contact }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ContactListItem(contact: Contact, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clickable { onClick() },
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Text(
+            text = contact.name ?: stringResource(R.string.no_name),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            style = MaterialTheme.typography.bodyLarge
+        )
+    }
+}
+
+@Composable
+fun ContactDetailScreen(contact: Contact, onBack: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        IconButton(onClick = onBack) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(
+                R.string.back
+            ))
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "${stringResource(R.string.name_label)}${contact.name ?:
+                    stringResource(R.string.not_specified)}",
+                    style = MaterialTheme.typography.titleLarge
+                )
+                Text(
+                    text = "${stringResource(R.string.phone_label)}${contact.phoneNumber ?:
+                    stringResource(R.string.not_specified)}",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Text(
+                    text = "${stringResource(R.string.email_label)}${contact.email ?:
+                            stringResource(R.string.not_specified)}",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun NoPermissionScreen(onRequestPermission: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = stringResource(R.string.no_permission_title),
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.error
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Button(onClick = onRequestPermission) {
+            Text(stringResource(R.string.request_permission))
+        }
+    }
+}
+
+@Composable
+fun RationaleScreen(onRequestPermission: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = stringResource(R.string.rationale_title),
+            style = MaterialTheme.typography.headlineSmall
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = stringResource(R.string.rationale_text),
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        Button(onClick = onRequestPermission) {
+            Text(stringResource(R.string.grant_access))
         }
     }
 }
