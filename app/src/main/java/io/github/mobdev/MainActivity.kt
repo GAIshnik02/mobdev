@@ -39,7 +39,12 @@ class MainActivity : AppCompatActivity() {
             operation = savedInstanceState.getString("operation", "")
             isNewOperation = savedInstanceState.getBoolean("isNewOperation", true)
             isResultDisplayed = savedInstanceState.getBoolean("isResultDisplayed", false)
-            updateDisplay()
+            val savedResult = savedInstanceState.getString("resultText", null)
+            if (savedResult != null) {
+                resultText.text = savedResult
+            } else {
+                updateDisplay()
+            }
         }
     }
 
@@ -50,6 +55,7 @@ class MainActivity : AppCompatActivity() {
         outState.putString("operation", operation)
         outState.putBoolean("isNewOperation", isNewOperation)
         outState.putBoolean("isResultDisplayed", isResultDisplayed)
+        outState.putString("resultText", resultText.text.toString())
     }
 
     private fun initButtons() {
