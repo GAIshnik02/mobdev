@@ -57,6 +57,7 @@ fun ContactApp() {
     }
 }
 
+
 @Composable
 fun ContactListScreen() {
     val context = LocalContext.current
@@ -64,11 +65,15 @@ fun ContactListScreen() {
     var selectedContact by remember { mutableStateOf<Contact?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var isRefreshing by remember { mutableStateOf(false) }
+    var isFirstLoad by remember { mutableStateOf(true) }
 
-    // Загрузка при первом входе
+    // Загрузка только при первом входе
     LaunchedEffect(Unit) {
-        contacts = context.fetchAllContacts()
-        isLoading = false
+        if (isFirstLoad) {
+            contacts = context.fetchAllContacts()
+            isLoading = false
+            isFirstLoad = false
+        }
     }
 
     // Функция обновления
@@ -97,7 +102,7 @@ fun ContactListScreen() {
                         onClick = { refreshContacts() },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(8.dp),
+                            .padding(18.dp),
                         enabled = !isRefreshing
                     ) {
                         if (isRefreshing) {

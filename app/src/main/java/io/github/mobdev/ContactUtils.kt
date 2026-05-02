@@ -6,12 +6,12 @@ import android.database.Cursor
 import android.provider.ContactsContract
 import android.util.Log
 
+
 data class Contact(
     val name: String?,
     val phoneNumber: String?,
     val email: String?
 )
-
 fun Context.fetchAllContacts(): List<Contact> {
     Log.d("FETCH", "fetchAllContacts called")
     val contactsMap = mutableMapOf<String, Contact>()
@@ -81,5 +81,5 @@ fun Context.fetchAllContacts(): List<Contact> {
         }
     }
 
-    return contactsMap.values.filter { it.name != null }.distinctBy { it.name }
+    return contactsMap.values.filter { !it.name.isNullOrBlank() }.distinctBy { it.name }
 }
