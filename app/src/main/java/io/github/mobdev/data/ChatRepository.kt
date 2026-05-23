@@ -1,21 +1,20 @@
 package io.github.mobdev.data
 
+import android.util.Log
 import com.google.gson.Gson
 import io.github.mobdev.data.api.ChatApi
 import io.github.mobdev.data.api.ChatMessage
 import io.github.mobdev.data.api.ImagePayload
-import io.github.mobdev.data.api.LoginRequest
 import io.github.mobdev.data.api.MessageData
 import io.github.mobdev.data.api.TextPayload
 import io.github.mobdev.data.network.TokenHolder
 import io.github.mobdev.data.session.SessionStore
-import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
-import retrofit2.HttpException
+import java.io.IOException
 
 class ChatRepository(
     private val api: ChatApi,
@@ -36,35 +35,56 @@ class ChatRepository(
     }
 
     suspend fun login(name: String, password: String) = withContext(Dispatchers.IO) {
-        val response = api.login(LoginRequest(name = name, pwd = password))
-        if (response.isSuccessful) {
-            val token = response.body()?.string()?.trim().orEmpty()
+        try {
+            val token = api.login(name, password)
             if (token.isBlank()) throw ApiException(ApiError.Unknown)
             sessionStore.saveCredentials(name, password)
             sessionStore.saveToken(token)
             tokenHolder.token = token
-            return@withContext
+        } catch (e: Exception) {
+            val message = e.message ?: ""
+            when {
+                message.contains("401") || message.contains("Invalid credentials") ->
+                    throw ApiException(ApiError.InvalidCredentials, e)
+                message.contains("Unauthorized") ->
+                    throw ApiException(ApiError.Unauthorized, e)
+                message.startsWith("HTTP") -> {
+                    val code = message.substringAfter("HTTP ").toIntOrNull() ?: 0
+                    throw ApiException(ApiError.Http(code), e)
+                }
+                e is IOException -> throw ApiException(ApiError.Network, e)
+                else -> throw ApiException(ApiError.Unknown, e)
+            }
         }
-        if (response.code() == 401) {
-            throw ApiException(ApiError.InvalidCredentials)
-        }
-        throw ApiException(ApiError.Http(response.code()))
     }
 
     suspend fun register(name: String): String = withContext(Dispatchers.IO) {
-        val response = api.register(name)
-        if (!response.isSuccessful) {
-            if (response.code() == 401) throw ApiException(ApiError.Unauthorized)
-            throw ApiException(ApiError.Http(response.code()))
+        try {
+            val rawResponse = api.register(name)
+            val password = passwordRegex.find(rawResponse)?.groupValues?.getOrNull(1)
+            if (password.isNullOrBlank()) throw ApiException(ApiError.Unknown)
+            password
+        } catch (e: Exception) {
+            val message = e.message ?: ""
+            when {
+                message.contains("409") -> throw ApiException(ApiError.Http(409), e)
+                message.contains("401") -> throw ApiException(ApiError.Unauthorized, e)
+                message.startsWith("HTTP") -> {
+                    val code = message.substringAfter("HTTP ").toIntOrNull() ?: 0
+                    throw ApiException(ApiError.Http(code), e)
+                }
+                e is IOException -> throw ApiException(ApiError.Network, e)
+                else -> throw ApiException(ApiError.Unknown, e)
+            }
         }
-        val raw = response.body()?.string().orEmpty()
-        val password = passwordRegex.find(raw)?.groupValues?.getOrNull(1)
-        if (password.isNullOrBlank()) throw ApiException(ApiError.Unknown)
-        password
     }
 
     suspend fun loadChannels(): List<String> = withContext(Dispatchers.IO) {
-        runApi { api.channels() }.sorted()
+        try {
+            api.channels().sorted()
+        } catch (e: Exception) {
+            throw handleException(e)
+        }
     }
 
     suspend fun loadMessages(
@@ -73,14 +93,16 @@ class ChatRepository(
         lastKnownId: Long = 0L,
         reverse: Boolean = false
     ): List<ChatMessage> = withContext(Dispatchers.IO) {
-        runApi {
+        try {
             api.channelMessages(
                 channel = chat,
                 limit = limit,
                 lastKnownId = lastKnownId,
                 reverse = reverse
-            )
-        }.sortedBy { it.id?.toLongOrNull() ?: Long.MAX_VALUE }
+            ).sortedBy { it.id?.toLongOrNull() ?: Long.MAX_VALUE }
+        } catch (e: Exception) {
+            throw handleException(e)
+        }
     }
 
     suspend fun sendTextMessage(from: String, to: String, text: String) = withContext(Dispatchers.IO) {
@@ -89,7 +111,11 @@ class ChatRepository(
             to = to,
             data = MessageData(text = TextPayload(text = text))
         )
-        runApi { api.postMessage(message) }
+        try {
+            api.postMessage(message)
+        } catch (e: Exception) {
+            throw handleException(e)
+        }
     }
 
     suspend fun sendImageMessage(
@@ -108,13 +134,24 @@ class ChatRepository(
         val messageBody = gson.toJson(message).toRequestBody("application/json".toMediaTypeOrNull())
         val imageBody = imageBytes.toRequestBody(normalizedMimeType.toMediaTypeOrNull())
         val imagePart = MultipartBody.Part.createFormData("picture", fileName, imageBody)
-        runApi { api.postMultipartMessage(messageBody, imagePart) }
+
+        try {
+            api.postMultipartMessage(messageBody, imagePart)
+        } catch (e: Exception) {
+            throw handleException(e)
+        }
     }
 
     suspend fun logout() = withContext(Dispatchers.IO) {
-        runCatching { api.logout() }
-        sessionStore.clearToken()
-        tokenHolder.token = null
+        try {
+            api.logout()
+        } catch (e: Exception) {
+            // ignore error on logout
+            Log.d("ChatRepository", "Logout error ignored: ${e.message}")
+        } finally {
+            sessionStore.clearToken()
+            tokenHolder.token = null
+        }
     }
 
     suspend fun clearSessionToken() = withContext(Dispatchers.IO) {
@@ -124,19 +161,17 @@ class ChatRepository(
 
     fun currentToken(): String? = tokenHolder.token
 
-    private suspend fun <T> runApi(request: suspend () -> retrofit2.Response<T>): T {
-        try {
-            val response = request()
-            if (response.isSuccessful) {
-                return response.body() ?: throw ApiException(ApiError.Unknown)
+    private fun handleException(e: Exception): ApiException {
+        val message = e.message ?: ""
+        return when {
+            message.contains("401") || message.contains("Unauthorized") ->
+                ApiException(ApiError.Unauthorized, e)
+            message.startsWith("HTTP") -> {
+                val code = message.substringAfter("HTTP ").toIntOrNull() ?: 0
+                ApiException(ApiError.Http(code), e)
             }
-            if (response.code() == 401) throw ApiException(ApiError.Unauthorized)
-            throw ApiException(ApiError.Http(response.code()))
-        } catch (error: IOException) {
-            throw ApiException(ApiError.Network, error)
-        } catch (error: HttpException) {
-            if (error.code() == 401) throw ApiException(ApiError.Unauthorized, error)
-            throw ApiException(ApiError.Http(error.code()), error)
+            e is IOException -> ApiException(ApiError.Network, e)
+            else -> ApiException(ApiError.Unknown, e)
         }
     }
 }
