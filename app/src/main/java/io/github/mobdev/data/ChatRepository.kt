@@ -1,5 +1,6 @@
 package io.github.mobdev.data
 
+import android.content.Context
 import android.util.Log
 import com.google.gson.Gson
 import io.github.mobdev.data.api.ChatApi
@@ -7,9 +8,17 @@ import io.github.mobdev.data.api.ChatMessage
 import io.github.mobdev.data.api.ImagePayload
 import io.github.mobdev.data.api.MessageData
 import io.github.mobdev.data.api.TextPayload
+import io.github.mobdev.data.database.AppDatabase
+import io.github.mobdev.data.database.entities.ChannelEntity
+import io.github.mobdev.data.database.entities.MessageEntity
+import io.github.mobdev.data.network.NetworkMonitor
 import io.github.mobdev.data.network.TokenHolder
 import io.github.mobdev.data.session.SessionStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
@@ -17,12 +26,30 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 
 class ChatRepository(
+    private val context: Context,
     private val api: ChatApi,
     private val sessionStore: SessionStore,
     private val tokenHolder: TokenHolder
 ) {
     private val gson = Gson()
-    private val passwordRegex = Regex("password:\\s*'([^']+)'")
+
+
+    private val database = AppDatabase.getInstance(context)
+
+    private val networkMonitor = NetworkMonitor(context)
+
+    private val _isNetworkAvailable = MutableStateFlow(networkMonitor.isNetworkAvailable())
+    val isNetworkAvailable: StateFlow<Boolean> = _isNetworkAvailable.asStateFlow()
+
+    init {
+        // Следим за сетью
+        kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+            networkMonitor.observeNetworkStatus().collect { available ->
+                _isNetworkAvailable.value = available
+            }
+        }
+    }
+
 
     suspend fun bootstrapSession(): SessionState {
         val session = sessionStore.currentSession()
@@ -60,11 +87,16 @@ class ChatRepository(
 
     suspend fun register(name: String): String = withContext(Dispatchers.IO) {
         try {
-            val rawResponse = api.register(name)
-            val password = passwordRegex.find(rawResponse)?.groupValues?.getOrNull(1)
-            if (password.isNullOrBlank()) throw ApiException(ApiError.Unknown)
+            println("register: attempting to register name=$name")
+            // api.register уже возвращает пароль (ты в ChatApi вытащил его из regex)
+            val password = api.register(name)
+            println("register: password=$password")
+            if (password.isNullOrBlank()) {
+                throw ApiException(ApiError.Unknown)
+            }
             password
         } catch (e: Exception) {
+            println("register: exception=${e.message}")
             val message = e.message ?: ""
             when {
                 message.contains("409") -> throw ApiException(ApiError.Http(409), e)
@@ -80,11 +112,21 @@ class ChatRepository(
     }
 
     suspend fun loadChannels(): List<String> = withContext(Dispatchers.IO) {
-        try {
-            api.channels().sorted()
-        } catch (e: Exception) {
-            throw handleException(e)
+        if (_isNetworkAvailable.value) {
+            try {
+                val channels = api.channels().sorted()
+                database.channelDao().insertAll(channels.map { ChannelEntity(it) })
+                return@withContext channels
+            } catch (e: Exception) {
+                return@withContext getCachedChannels()
+            }
+        } else {
+            return@withContext getCachedChannels()
         }
+    }
+
+    private suspend fun getCachedChannels(): List<String> {
+        return database.channelDao().getAll().map { it.name }
     }
 
     suspend fun loadMessages(
@@ -93,26 +135,54 @@ class ChatRepository(
         lastKnownId: Long = 0L,
         reverse: Boolean = false
     ): List<ChatMessage> = withContext(Dispatchers.IO) {
-        try {
-            api.channelMessages(
-                channel = chat,
-                limit = limit,
-                lastKnownId = lastKnownId,
-                reverse = reverse
-            ).sortedBy { it.id?.toLongOrNull() ?: Long.MAX_VALUE }
-        } catch (e: Exception) {
-            throw handleException(e)
+        if (_isNetworkAvailable.value) {
+            try {
+                val messages = api.channelMessages(
+                    channel = chat,
+                    limit = limit,
+                    lastKnownId = lastKnownId,
+                    reverse = reverse
+                ).sortedBy { it.id?.toLongOrNull() ?: Long.MAX_VALUE }
+
+                // Сохраняем в БД (без дубликатов)
+                messages.forEach { message ->
+                    val existing = database.messageDao().getMessagesForChannel(chat)
+                    if (existing.none { it.id == message.id }) {
+                        database.messageDao().insert(MessageEntity.fromChatMessage(message))
+                    }
+                }
+                return@withContext messages
+            } catch (e: Exception) {
+                return@withContext getCachedMessages(chat)
+            }
+        } else {
+            return@withContext getCachedMessages(chat)
         }
     }
 
+    private suspend fun getCachedMessages(chat: String): List<ChatMessage> {
+        return database.messageDao()
+            .getMessagesForChannel(chat)
+            .map { it.toChatMessage() }
+            .distinctBy { it.id }
+    }
+
     suspend fun sendTextMessage(from: String, to: String, text: String) = withContext(Dispatchers.IO) {
+        // Проверка сети
+        if (!_isNetworkAvailable.value) {
+            throw ApiException(ApiError.Network, IOException("No network connection"))
+        }
+
         val message = ChatMessage(
             from = from,
             to = to,
             data = MessageData(text = TextPayload(text = text))
         )
+
         try {
             api.postMessage(message)
+            // Сохраняем отправленное сообщение локально
+            database.messageDao().insert(MessageEntity.fromChatMessage(message))
         } catch (e: Exception) {
             throw handleException(e)
         }
@@ -125,6 +195,11 @@ class ChatRepository(
         fileName: String,
         mimeType: String
     ) = withContext(Dispatchers.IO) {
+        // Проверка сети
+        if (!_isNetworkAvailable.value) {
+            throw ApiException(ApiError.Network, IOException("No network connection"))
+        }
+
         val normalizedMimeType = mimeType.takeIf { it.startsWith("image/") } ?: "image/jpeg"
         val message = ChatMessage(
             from = from,
@@ -137,8 +212,17 @@ class ChatRepository(
 
         try {
             api.postMultipartMessage(messageBody, imagePart)
+            // Сохраняем отправленное сообщение локально
+            database.messageDao().insert(MessageEntity.fromChatMessage(message))
         } catch (e: Exception) {
             throw handleException(e)
+        }
+    }
+
+    suspend fun addNewMessageFromWebSocket(message: ChatMessage) {
+        val existing = database.messageDao().getMessagesForChannel(message.to)
+        if (existing.none { it.id == message.id }) {
+            database.messageDao().insert(MessageEntity.fromChatMessage(message))
         }
     }
 
@@ -146,7 +230,6 @@ class ChatRepository(
         try {
             api.logout()
         } catch (e: Exception) {
-            // ignore error on logout
             Log.d("ChatRepository", "Logout error ignored: ${e.message}")
         } finally {
             sessionStore.clearToken()

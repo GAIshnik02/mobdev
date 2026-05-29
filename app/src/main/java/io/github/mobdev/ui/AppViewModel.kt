@@ -29,6 +29,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val tokenHolder = TokenHolder()
     private val sessionStore = SessionStore(application.applicationContext)
     private val repository = ChatRepository(
+        context = application.applicationContext,
         api = NetworkModule.createApi(tokenHolder),
         sessionStore = sessionStore,
         tokenHolder = tokenHolder
@@ -40,6 +41,39 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         bootstrap()
+        observeNetworkStatus()
+    }
+
+    private fun observeNetworkStatus() {
+        viewModelScope.launch {
+            repository.isNetworkAvailable.collect { isAvailable ->
+                val previousOffline = _uiState.value.isOffline
+                val isAuthorized = _uiState.value.isAuthorized
+                val username = _uiState.value.username
+
+                _uiState.update { it.copy(isOffline = !isAvailable) }
+
+                // Сеть появилась
+                if (isAvailable && isAuthorized) {
+                    println("observeNetworkStatus: Network available, reconnecting WebSocket")
+                    // Переподключаем WebSocket
+                    username?.let {
+                        connectWebSocket(it)
+                    }
+                    // Обновляем каналы и сообщения
+                    refreshChannels()
+                    _uiState.value.selectedChat?.let { chat ->
+                        loadMessages(chat, reset = true)
+                    }
+                }
+
+                // Сеть пропала
+                if (!isAvailable && !previousOffline) {
+                    println("observeNetworkStatus: Network lost, disconnecting WebSocket")
+                    webSocketClient.disconnect()
+                }
+            }
+        }
     }
 
     fun onLoginChanged(value: String) {
@@ -128,9 +162,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 errorMessage = null
             )
         }
-        if (uiState.value.messagesByChat[chat].isNullOrEmpty()) {
-            loadMessages(chat, reset = true)
-        }
+        loadMessages(chat, reset = true)
     }
 
     fun closeChat() {
@@ -151,26 +183,108 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun sendMessage() {
+        println("sendMessage: START")
+
         val state = uiState.value
-        val chat = state.selectedChat ?: return
+        val chat = state.selectedChat
+        println("sendMessage: selectedChat=$chat")
+
+        if (chat == null) {
+            println("sendMessage: selectedChat is null, RETURN")
+            return
+        }
+
         val text = state.outgoingText.trim()
-        val username = state.username ?: return
-        if (text.isBlank()) return
+        val username = state.username
+        println("sendMessage: text=$text, username=$username")
+
+        if (text.isBlank()) {
+            println("sendMessage: text is blank, RETURN")
+            return
+        }
+
+        if (username.isNullOrBlank()) {
+            println("sendMessage: username is null or blank, RETURN")
+            return
+        }
+
+        if (state.isOffline) {
+            println("sendMessage: offline mode, RETURN")
+            _uiState.update { it.copy(errorMessage = UiError.Network) }
+            return
+        }
+
+        println("sendMessage: ABOUT TO SEND to chat=$chat")
+
+        val tempId = "temp-${System.currentTimeMillis()}"
+        val tempMessage = ChatMessage(
+            id = tempId,
+            from = username,
+            to = chat,
+            data = io.github.mobdev.data.api.MessageData(
+                text = io.github.mobdev.data.api.TextPayload(text)
+            ),
+            time = System.currentTimeMillis().toString()
+        )
+
+        // Добавляем временное сообщение в UI
+        _uiState.update { currentState ->
+            val currentMessages = currentState.messagesByChat[chat].orEmpty()
+            println("sendMessage: adding temp message, currentSize=${currentMessages.size}")
+            currentState.copy(
+                messagesByChat = currentState.messagesByChat + (chat to (currentMessages + tempMessage)),
+                outgoingText = "",
+                isSending = true
+            )
+        }
+
         viewModelScope.launch {
-            _uiState.update { it.copy(isSending = true) }
+            println("sendMessage: calling repository.sendTextMessage")
             runCatching { repository.sendTextMessage(from = username, to = chat, text = text) }
                 .onSuccess {
-                    _uiState.update { it.copy(isSending = false, outgoingText = "") }
-                    loadMessages(chat = chat, reset = true)
+                    println("sendMessage: SUCCESS")
+                    _uiState.update { it.copy(isSending = false) }
+
+                    // Вместо полной перезагрузки - удаляем только временное сообщение
+                    // (серверные сообщения уже добавит WebSocket или следующий loadMessages)
+                    val currentMessages = _uiState.value.messagesByChat[chat].orEmpty()
+                    val filteredMessages = currentMessages.filter { it.id != tempId }
+                    _uiState.update {
+                        it.copy(
+                            messagesByChat = it.messagesByChat + (chat to filteredMessages)
+                        )
+                    }
+                    // Не делаем loadMessages, чтобы не создавать дубли
+                    // loadMessages(chat = chat, reset = true)
                 }
-                .onFailure { handleRepositoryError(it) { stateCopy -> stateCopy.copy(isSending = false) } }
+                .onFailure { error ->
+                    println("sendMessage: FAILURE: ${error.message}")
+                    _uiState.update { it.copy(isSending = false) }
+                    // При ошибке - удаляем временное сообщение
+                    val currentMessages = _uiState.value.messagesByChat[chat].orEmpty()
+                    val filteredMessages = currentMessages.filter { it.id != tempId }
+                    _uiState.update {
+                        it.copy(
+                            messagesByChat = it.messagesByChat + (chat to filteredMessages)
+                        )
+                    }
+                    handleRepositoryError(error) { stateCopy -> stateCopy }
+                }
         }
     }
+
 
     fun sendImage(uri: Uri) {
         val state = uiState.value
         val chat = state.selectedChat ?: return
         val username = state.username ?: return
+
+        // Проверка офлайн режима
+        if (state.isOffline) {
+            _uiState.update { it.copy(errorMessage = UiError.Network) }
+            return
+        }
+
         viewModelScope.launch {
             _uiState.update { it.copy(isSending = true, errorMessage = null) }
             runCatching {
@@ -187,7 +301,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     _uiState.update { it.copy(isSending = false) }
                     loadMessages(chat = chat, reset = true)
                 }
-                .onFailure { handleImageSendError(it) { stateCopy -> stateCopy.copy(isSending = false) } }
+                .onFailure { error ->
+                    _uiState.update { it.copy(isSending = false) }
+                    handleImageSendError(error) { stateCopy -> stateCopy }
+                }
         }
     }
 
@@ -276,6 +393,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         val channelName = if (rawName.endsWith("@channel")) rawName else "$rawName@channel"
+
+        // Проверка офлайн режима
+        if (state.isOffline) {
+            _uiState.update { it.copy(errorMessage = UiError.Network) }
+            return
+        }
+
         viewModelScope.launch {
             _uiState.update { it.copy(isSending = true) }
             runCatching { repository.sendTextMessage(from = username, to = channelName, text = message) }
@@ -293,7 +417,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     loadMessages(channelName, reset = true)
                 }
-                .onFailure { handleRepositoryError(it) { stateCopy -> stateCopy.copy(isSending = false) } }
+                .onFailure { error ->
+                    _uiState.update { it.copy(isSending = false) }
+                    handleRepositoryError(error) { stateCopy -> stateCopy }
+                }
         }
     }
 
@@ -333,31 +460,55 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun tryAutoLogin(session: SessionState) {
         val name = session.name
         val password = session.password
+
         if (name.isNullOrBlank() || password.isNullOrBlank()) {
             _uiState.update { it.copy(isLoading = false, isAuthorized = false) }
             return
         }
+
+        // Если нет сети - автоматически входим в офлайн-режим
+        if (!repository.isNetworkAvailable.value) {
+            // Входим без проверки пароля (только для просмотра кэша)
+            _uiState.update {
+                it.copy(
+                    isLoading = false,
+                    isAuthorized = true,
+                    username = name,
+                    isOffline = true  // ← помечаем как офлайн-режим
+                )
+            }
+            // Загружаем кэшированные каналы
+            refreshChannels()
+            return
+        }
+
+        // Есть сеть - нормальная аутентификация
         runCatching { repository.login(name, password) }
             .onSuccess {
                 _uiState.update {
                     it.copy(
                         isLoading = false,
                         isAuthorized = true,
-                        username = name
+                        username = name,
+                        isOffline = false
                     )
                 }
                 connectWebSocket(name)
                 refreshChannels()
             }
-            .onFailure {
+            .onFailure { error ->
                 _uiState.update {
                     it.copy(
                         isLoading = false,
                         isAuthorized = false
                     )
                 }
+                if ((error as? ApiException)?.error != ApiError.Network) {
+                    _uiState.update { it.copy(loginError = LoginError.Generic) }
+                }
             }
     }
+
 
     private fun loadMessages(
         chat: String,
@@ -399,6 +550,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun handleRepositoryError(throwable: Throwable, fallback: (AppUiState) -> AppUiState) {
         val apiError = (throwable as? ApiException)?.error
+
+        // Если нет сети - показываем ошибку
+        if (apiError == ApiError.Network) {
+            _uiState.update { state ->
+                fallback(state).copy(errorMessage = UiError.Network)
+            }
+            return
+        }
+
         if (apiError == ApiError.Unauthorized) {
             viewModelScope.launch {
                 repository.clearSessionToken()
@@ -416,12 +576,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
             return
         }
-        val message = when (apiError) {
-            ApiError.Network -> UiError.Network
-            else -> UiError.Generic
-        }
+
         _uiState.update { state ->
-            fallback(state).copy(errorMessage = message)
+            fallback(state).copy(errorMessage = UiError.Generic)
         }
     }
 
@@ -432,6 +589,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             token = token
         ) { message ->
             val chatName = message.to
+            viewModelScope.launch {
+                repository.addNewMessageFromWebSocket(message)
+            }
             _uiState.update { state ->
                 val existing = state.messagesByChat[chatName].orEmpty()
                 val updatedMessages = (existing + message).distinctBy { it.id ?: "${it.from}-${it.time}" }
@@ -445,8 +605,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun handleRegistrationError(throwable: Throwable) {
-        val apiError = (throwable as? ApiException)?.error
-        val registrationError = when (apiError) {
+        val registrationError = when (val apiError = (throwable as? ApiException)?.error) {
             is ApiError.Http -> if (apiError.code == 409) RegistrationError.NameTaken else RegistrationError.Generic
             ApiError.Network -> RegistrationError.Network
             else -> RegistrationError.Generic
@@ -465,9 +624,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             handleRepositoryError(throwable, fallback)
             return
         }
+        if (apiError == ApiError.Network) {
+            _uiState.update { state ->
+                fallback(state).copy(errorMessage = UiError.Network)
+            }
+            return
+        }
         val message = when {
             throwable is IllegalStateException -> UiError.PhotoRead
-            apiError == ApiError.Network -> UiError.PhotoNetwork
             apiError is ApiError.Http -> UiError.PhotoHttp(apiError.code)
             else -> UiError.PhotoGeneric
         }
@@ -507,7 +671,8 @@ data class AppUiState(
     val createChannelNameInput: String = "",
     val createChannelFirstMessageInput: String = "",
     val fullScreenImagePath: String? = null,
-    val errorMessage: UiError? = null
+    val errorMessage: UiError? = null,
+    val isOffline: Boolean = false
 )
 
 enum class LoginError {

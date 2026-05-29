@@ -67,54 +67,81 @@ fun ChatApp(viewModel: AppViewModel) {
         }
     }
 
-    Surface(modifier = Modifier.fillMaxSize()) {
-        when {
-            state.isLoading -> LoadingScreen()
-            !state.isAuthorized -> LoginScreen(
-                state = state,
-                onLoginChanged = viewModel::onLoginChanged,
-                onPasswordChanged = viewModel::onPasswordChanged,
-                onLoginClick = viewModel::login,
-                onDismissLoginError = viewModel::clearLoginError,
-                onNavigateToRegistration = viewModel::showRegistration,
-                onRegistrationNameChanged = viewModel::onRegistrationNameChanged,
-                onRegisterClick = viewModel::register,
-                onNavigateToLogin = viewModel::showLogin
-            )
-            isLandscape -> LandscapeContent(
-                state = state,
-                onOpenChat = viewModel::openChat,
-                onLogout = viewModel::logout,
-                onOutgoingTextChanged = viewModel::onOutgoingTextChanged,
-                onSendMessage = viewModel::sendMessage,
-                onLoadMore = viewModel::loadMore,
-                onImageClick = viewModel::openImage,
-                onRetry = viewModel::refreshChannels,
-                onPickImage = viewModel::sendImage,
-                onShowCreateChannel = viewModel::showCreateChannelDialog
-            )
-            state.selectedChat == null -> ChatsScreen(
-                state = state,
-                onOpenChat = viewModel::openChat,
-                onLogout = viewModel::logout,
-                onRetry = viewModel::refreshChannels,
-                onShowCreateChannel = viewModel::showCreateChannelDialog
-            )
-            else -> MessagesScreen(
-                state = state,
-                onBackToChats = viewModel::closeChat,
-                onOutgoingTextChanged = viewModel::onOutgoingTextChanged,
-                onSendMessage = viewModel::sendMessage,
-                onLoadMore = viewModel::loadMore,
-                onImageClick = viewModel::openImage,
-                onPickImage = viewModel::sendImage
-            )
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Основной контент
+        Surface(modifier = Modifier.fillMaxSize()) {
+            when {
+                state.isLoading -> LoadingScreen()
+                !state.isAuthorized -> LoginScreen(
+                    state = state,
+                    onLoginChanged = viewModel::onLoginChanged,
+                    onPasswordChanged = viewModel::onPasswordChanged,
+                    onLoginClick = viewModel::login,
+                    onDismissLoginError = viewModel::clearLoginError,
+                    onNavigateToRegistration = viewModel::showRegistration,
+                    onRegistrationNameChanged = viewModel::onRegistrationNameChanged,
+                    onRegisterClick = viewModel::register,
+                    onNavigateToLogin = viewModel::showLogin
+                )
+                isLandscape -> LandscapeContent(
+                    state = state,
+                    onOpenChat = viewModel::openChat,
+                    onLogout = viewModel::logout,
+                    onOutgoingTextChanged = viewModel::onOutgoingTextChanged,
+                    onSendMessage = viewModel::sendMessage,
+                    onLoadMore = viewModel::loadMore,
+                    onImageClick = viewModel::openImage,
+                    onRetry = viewModel::refreshChannels,
+                    onPickImage = viewModel::sendImage,
+                    onShowCreateChannel = viewModel::showCreateChannelDialog
+                )
+                state.selectedChat == null -> ChatsScreen(
+                    state = state,
+                    onOpenChat = viewModel::openChat,
+                    onLogout = viewModel::logout,
+                    onRetry = viewModel::refreshChannels,
+                    onShowCreateChannel = viewModel::showCreateChannelDialog
+                )
+                else -> MessagesScreen(
+                    state = state,
+                    onBackToChats = viewModel::closeChat,
+                    onOutgoingTextChanged = viewModel::onOutgoingTextChanged,
+                    onSendMessage = viewModel::sendMessage,
+                    onLoadMore = viewModel::loadMore,
+                    onImageClick = viewModel::openImage,
+                    onPickImage = viewModel::sendImage
+                )
+            }
         }
+
+        // Офлайн-индикатор (поверх всего)
+        if (state.isOffline) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(8.dp)
+                    .align(Alignment.TopCenter)
+            ) {
+                Text(
+                    text = "⚠️ Нет подключения к интернету",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    color = Color.White,
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+
+        // FullScreen image поверх всего
         state.fullScreenImagePath?.let { path ->
             ImageScreen(path = path, onClose = viewModel::closeImage)
         }
     }
 
+    // Диалоги
     val registeredPassword = state.registeredPassword
     if (registeredPassword != null) {
         AlertDialog(

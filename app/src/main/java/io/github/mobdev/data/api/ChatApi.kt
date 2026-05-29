@@ -29,16 +29,19 @@ class ChatApi(
 
         client.newCall(request).execute().use { response ->
             val responseBody = response.body?.string() ?: ""
+            println("register: code=${response.code}, body=$responseBody")
+
             if (response.isSuccessful) {
                 val passwordRegex = Regex("password:\\s*'([^']+)'")
                 val password = passwordRegex.find(responseBody)?.groupValues?.getOrNull(1)
+                println("register: extracted password=$password")
                 if (!password.isNullOrBlank()) {
                     continuation.resume(password)
                 } else {
-                    continuation.resumeWith(Result.failure(Exception("Failed to extract password")))
+                    continuation.resumeWith(Result.failure(Exception("Failed to extract password. Response: $responseBody")))
                 }
             } else {
-                continuation.resumeWith(Result.failure(Exception("HTTP ${response.code}")))
+                continuation.resumeWith(Result.failure(Exception("HTTP ${response.code}: $responseBody")))
             }
         }
     }
